@@ -33,7 +33,6 @@ on:
         type: choice
         options:
           - KSUN+SUSFS+BBG+NET+DS
-          - KSUN+SUSFS+BBG+NET
           - KSUN+SUSFS+BBG
           - KSUN+SUSFS+NET
           - KSUN+SUSFS+DS
