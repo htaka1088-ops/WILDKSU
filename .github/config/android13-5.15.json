@@ -2,8 +2,8 @@
   "version": "android13-5.15",
   "include": [
     {
-      "sublevel": "178",
-      "date": "2025-03"
+      "sublevel": "lts",
+      "date": "lts"
     }
   ]
 }
