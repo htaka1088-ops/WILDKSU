@@ -4,6 +4,10 @@
     {
       "sublevel": "lts",
       "date": "lts"
+    },
+    {
+      "sublevel": "178",
+      "date": "2025-03"
     }
   ]
 }
