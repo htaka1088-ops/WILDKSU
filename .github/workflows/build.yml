@@ -328,10 +328,11 @@ jobs:
         uses: ./.github/actions/build-kernel
         with:
           version: ${{ inputs.version }}
-        - name: Get Cache Stats
-          uses: ./.github/actions/cache-stats
-          with:
-            clear_stats: false
+
+      - name: Get Cache Stats
+        uses: ./.github/actions/cache-stats
+        with:
+          clear_stats: false
   
       - name: Save Ccache
         continue-on-error: true
