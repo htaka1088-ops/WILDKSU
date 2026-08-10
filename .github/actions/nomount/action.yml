@@ -1,0 +1,148 @@
+name: Setup NoMount
+description: Integrate NoMount into the kernel source tree
+
+inputs:
+  version:
+    description: Kernel version identifier
+    required: true
+  android_version:
+    description: Android version
+    required: true
+  kernel_version:
+    description: Kernel version
+    required: true
+  sublevel:
+    description: Kernel sublevel
+    required: true
+  os_patch_level:
+    description: Android security patch level
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Clone NoMount
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        set -euo pipefail
+
+        rm -rf nomount
+
+        git clone --depth=1 -b dev \
+          https://github.com/maxsteeel/nomount.git \
+          nomount
+
+        echo "✓ NoMount repository cloned"
+
+    - name: Copy NoMount Sources
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      run: |
+        set -euo pipefail
+
+        mkdir -p common/fs
+
+        cp -av "${{ github.workspace }}/nomount/kernel/src/"* common/fs/
+
+        echo "✓ NoMount sources copied"
+
+    - name: Apply NoMount Patch
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      run: |
+        set -euo pipefail
+
+        PATCH_DIR="${{ github.workspace }}/nomount/kernel/patches"
+        KCONFIG_FILE="common/fs/Kconfig"
+        MAKEFILE="common/fs/Makefile"
+        FIXED_PATCH="/tmp/nomount_fix.patch"
+
+        KERNEL_SHORT="${{ inputs.kernel_version }}"
+
+        echo "========================================"
+        echo "NoMount Integration"
+        echo "========================================"
+        echo "Build:          ${{ inputs.version }}"
+        echo "Android:        ${{ inputs.android_version }}"
+        echo "Kernel:         ${KERNEL_SHORT}"
+        echo "Sublevel:       ${{ inputs.sublevel }}"
+        echo "Patch level:    ${{ inputs.os_patch_level }}"
+        echo "========================================"
+
+        PATCH_SRC="$PATCH_DIR/nomount_${KERNEL_SHORT}_kernel_integration.patch"
+
+        if [ ! -f "$PATCH_SRC" ]; then
+          echo "::error::No NoMount integration patch found for kernel ${KERNEL_SHORT}"
+          echo "Expected:"
+          echo "  $PATCH_SRC"
+          echo
+          echo "Available patches:"
+          ls -1 "$PATCH_DIR"/nomount_*_kernel_integration.patch 2>/dev/null || \
+            echo "  (none found)"
+          exit 1
+        fi
+
+        echo "Using patch:"
+        echo "  $PATCH_SRC"
+
+        sed \
+          -e 's|^diff --git a/fs/|diff --git a/common/fs/|' \
+          -e 's|^--- a/fs/|--- a/common/fs/|' \
+          -e 's|^\+\+\+ b/fs/|+++ b/common/fs/|' \
+          "$PATCH_SRC" > "$FIXED_PATCH"
+
+        echo "Running patch dry-run..."
+
+        if ! patch --dry-run -p1 < "$FIXED_PATCH"; then
+          echo "::error::NoMount patch failed dry-run"
+          echo "Kernel: ${KERNEL_SHORT}"
+          echo "Sublevel: ${{ inputs.sublevel }}"
+          echo "Patch level: ${{ inputs.os_patch_level }}"
+          exit 1
+        fi
+
+        patch -p1 --forward < "$FIXED_PATCH"
+
+        echo "✓ NoMount patch applied"
+
+        echo "---- NoMount verification ----"
+
+        grep -n "NOMOUNT" "$KCONFIG_FILE" || {
+          echo "::error::NOMOUNT is missing from $KCONFIG_FILE"
+          exit 1
+        }
+
+        grep -n "nomount" "$MAKEFILE" || {
+          echo "::error::nomount object rule is missing from $MAKEFILE"
+          exit 1
+        }
+
+        echo "✓ NoMount Kconfig detected"
+        echo "✓ NoMount Makefile rule detected"
+
+    - name: Verify NoMount Installation
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      run: |
+        set -euo pipefail
+
+        if [ -f common/fs/nomount.c ] && [ -f common/fs/nomount.h ]; then
+          echo "✓ SUCCESS: NoMount sources present"
+        else
+          echo "✗ FAILED: NoMount sources missing"
+          ls -la common/fs || true
+          exit 1
+        fi
+
+        echo "---- Kconfig ----"
+        grep -n "NOMOUNT" common/fs/Kconfig
+
+        echo "---- Makefile ----"
+        grep -n "nomount" common/fs/Makefile
+
+    - name: Enable NoMount Kernel Config
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          CONFIG_NOMOUNT=y

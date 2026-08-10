@@ -36,78 +36,6 @@ runs:
         # Extract and export BBG version info
         BBG_COMMIT=$(git rev-parse --short HEAD 2>/dev/null)
         echo "BBG_COMMIT=$BBG_COMMIT" >> $GITHUB_ENV
-    # ==================== NoMount ====================
-
-    - name: Clone NoMount
-      shell: bash
-      working-directory: ${{ github.workspace }}
-      run: |
-        git clone --depth=1 -b dev https://github.com/maxsteeel/nomount.git nomount
-
-    - name: Copy NoMount Sources
-      shell: bash
-      working-directory: ${{ github.workspace }}/kernel
-      run: |
-        set -euo pipefail
-        mkdir -p common/fs
-        cp -av "${{ github.workspace }}/nomount/kernel/src/"* common/fs/
-        echo "✓ copied nomount sources"
-
-    - name: Apply NoMount Patch (exact kernel-version match required)
-      shell: bash
-      working-directory: ${{ github.workspace }}/kernel
-      run: |
-        set -euo pipefail
-
-        PATCH_DIR="${{ github.workspace }}/nomount/kernel/patches"
-        KCONFIG_FILE="common/fs/Kconfig"
-        MAKEFILE="common/fs/Makefile"
-        FIXED_PATCH="/tmp/nomount_fix.patch"
-        KERNEL_SHORT="${{ inputs.kernel_version }}"
-        echo "Building: ${{ inputs.version }} (android=${{ inputs.android_version }} kernel=${KERNEL_SHORT} sublevel=${{ inputs.sublevel }} patch_level=${{ inputs.os_patch_level }})"
-
-        PATCH_SRC="$PATCH_DIR/nomount_${KERNEL_SHORT}_kernel_integration.patch"
-
-        if [ ! -f "$PATCH_SRC" ]; then
-          echo "::error::No NoMount integration patch found for kernel ${KERNEL_SHORT} (looked for $(basename "$PATCH_SRC"))."
-          echo "Available patches in $PATCH_DIR:"
-          ls -1 "$PATCH_DIR"/nomount_*_kernel_integration.patch 2>/dev/null || echo "  (none found)"
-          echo "Add a matching patch upstream in maxsteeel/nomount for this kernel version before enabling NoMount here."
-          exit 1
-        fi
-
-        echo "Using exact-match patch: $PATCH_SRC"
-        sed -e 's|^diff --git a/fs/|diff --git a/common/fs/|' \
-            -e 's|^--- a/fs/|--- a/common/fs/|' \
-            -e 's|^\+\+\+ b/fs/|+++ b/common/fs/|' \
-            "$PATCH_SRC" > "$FIXED_PATCH"
-
-        if ! patch --dry-run -p1 < "$FIXED_PATCH"; then
-          echo "::error::NoMount patch for kernel ${KERNEL_SHORT} failed dry-run against this source tree (sublevel ${{ inputs.sublevel }}, patch level ${{ inputs.os_patch_level }})."
-          patch --dry-run -p1 < "$FIXED_PATCH" || true
-          exit 1
-        fi
-
-        patch -p1 --forward < "$FIXED_PATCH"
-        echo "✓ NoMount patch applied for kernel ${KERNEL_SHORT}"
-
-        echo "---- Verification ----"
-        grep -n "NOMOUNT" "$KCONFIG_FILE" || { echo "::error::NOMOUNT not present in $KCONFIG_FILE after patching"; exit 1; }
-        grep -n "nomount" "$MAKEFILE" || { echo "::error::nomount object rule not present in $MAKEFILE after patching"; exit 1; }
-
-    - name: Verify NoMount Installation
-      shell: bash
-      working-directory: ${{ github.workspace }}/kernel
-      run: |
-        if [ -f common/fs/nomount.c ] && [ -f common/fs/nomount.h ]; then
-          echo "✓ SUCCESS: NoMount sources present"
-        else
-          echo "✗ FAILED: NoMount sources missing in common/fs/"
-          ls -la common/fs || true
-          exit 1
-        fi
-        grep -n "nomount" common/fs/Makefile
-        grep -n "NOMOUNT" common/fs/Kconfig
 
     # ==================== Kernel Config ====================
 
@@ -116,4 +44,3 @@ runs:
       with:
         config_list: |
           CONFIG_BBG=y
-          CONFIG_NOMOUNT=y
