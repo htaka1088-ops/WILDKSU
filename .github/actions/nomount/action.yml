@@ -29,120 +29,133 @@ runs:
 
         rm -rf nomount
 
-        git clone --depth=1 -b dev \
+        git clone \
+          --depth=1 \
+          --branch=dev \
           https://github.com/maxsteeel/nomount.git \
           nomount
 
-        echo "✓ NoMount repository cloned"
+        echo "NoMount repository:"
+        git -C nomount rev-parse --short HEAD
+        git -C nomount branch --show-current
 
-    - name: Copy NoMount Sources
+    - name: Integrate NoMount
       shell: bash
       working-directory: ${{ github.workspace }}/kernel
       run: |
         set -euo pipefail
 
-        mkdir -p common/fs
-
-        cp -av "${{ github.workspace }}/nomount/kernel/src/"* common/fs/
-
-        echo "✓ NoMount sources copied"
-
-    - name: Apply NoMount Patch
-      shell: bash
-      working-directory: ${{ github.workspace }}/kernel
-      run: |
-        set -euo pipefail
-
-        PATCH_DIR="${{ github.workspace }}/nomount/kernel/patches"
-        KCONFIG_FILE="common/fs/Kconfig"
-        MAKEFILE="common/fs/Makefile"
-        FIXED_PATCH="/tmp/nomount_fix.patch"
-
-        KERNEL_SHORT="${{ inputs.kernel_version }}"
+        NOMOUNT_SRC="${{ github.workspace }}/nomount/kernel/src"
+        FS_DIR="${{ github.workspace }}/kernel/common/fs"
+        NOMOUNT_DIR="${FS_DIR}/nomount"
+        KCONFIG="${FS_DIR}/Kconfig"
+        MAKEFILE="${FS_DIR}/Makefile"
 
         echo "========================================"
         echo "NoMount Integration"
         echo "========================================"
-        echo "Build:          ${{ inputs.version }}"
-        echo "Android:        ${{ inputs.android_version }}"
-        echo "Kernel:         ${KERNEL_SHORT}"
-        echo "Sublevel:       ${{ inputs.sublevel }}"
-        echo "Patch level:    ${{ inputs.os_patch_level }}"
+        echo "Build:       ${{ inputs.version }}"
+        echo "Android:     ${{ inputs.android_version }}"
+        echo "Kernel:      ${{ inputs.kernel_version }}"
+        echo "Sublevel:    ${{ inputs.sublevel }}"
+        echo "Patch level: ${{ inputs.os_patch_level }}"
         echo "========================================"
 
-        PATCH_SRC="$PATCH_DIR/nomount_${KERNEL_SHORT}_kernel_integration.patch"
-
-        if [ ! -f "$PATCH_SRC" ]; then
-          echo "::error::No NoMount integration patch found for kernel ${KERNEL_SHORT}"
-          echo "Expected:"
-          echo "  $PATCH_SRC"
-          echo
-          echo "Available patches:"
-          ls -1 "$PATCH_DIR"/nomount_*_kernel_integration.patch 2>/dev/null || \
-            echo "  (none found)"
+        if [ ! -d "$NOMOUNT_SRC" ]; then
+          echo "::error::NoMount source directory not found:"
+          echo "  $NOMOUNT_SRC"
           exit 1
         fi
 
-        echo "Using patch:"
-        echo "  $PATCH_SRC"
-
-        sed \
-          -e 's|^diff --git a/fs/|diff --git a/common/fs/|' \
-          -e 's|^--- a/fs/|--- a/common/fs/|' \
-          -e 's|^\+\+\+ b/fs/|+++ b/common/fs/|' \
-          "$PATCH_SRC" > "$FIXED_PATCH"
-
-        echo "Running patch dry-run..."
-
-        if ! patch --dry-run -p1 < "$FIXED_PATCH"; then
-          echo "::error::NoMount patch failed dry-run"
-          echo "Kernel: ${KERNEL_SHORT}"
-          echo "Sublevel: ${{ inputs.sublevel }}"
-          echo "Patch level: ${{ inputs.os_patch_level }}"
+        if [ ! -f "$KCONFIG" ]; then
+          echo "::error::Kernel fs/Kconfig not found:"
+          echo "  $KCONFIG"
           exit 1
         fi
 
-        patch -p1 --forward < "$FIXED_PATCH"
-
-        echo "✓ NoMount patch applied"
-
-        echo "---- NoMount verification ----"
-
-        grep -n "NOMOUNT" "$KCONFIG_FILE" || {
-          echo "::error::NOMOUNT is missing from $KCONFIG_FILE"
-          exit 1
-        }
-
-        grep -n "nomount" "$MAKEFILE" || {
-          echo "::error::nomount object rule is missing from $MAKEFILE"
-          exit 1
-        }
-
-        echo "✓ NoMount Kconfig detected"
-        echo "✓ NoMount Makefile rule detected"
-
-    - name: Verify NoMount Installation
-      shell: bash
-      working-directory: ${{ github.workspace }}/kernel
-      run: |
-        set -euo pipefail
-
-        if [ -f common/fs/nomount.c ] && [ -f common/fs/nomount.h ]; then
-          echo "✓ SUCCESS: NoMount sources present"
-        else
-          echo "✗ FAILED: NoMount sources missing"
-          ls -la common/fs || true
+        if [ ! -f "$MAKEFILE" ]; then
+          echo "::error::Kernel fs/Makefile not found:"
+          echo "  $MAKEFILE"
           exit 1
         fi
 
-        echo "---- Kconfig ----"
-        grep -n "NOMOUNT" common/fs/Kconfig
+        rm -rf "$NOMOUNT_DIR"
+        mkdir -p "$NOMOUNT_DIR"
 
-        echo "---- Makefile ----"
-        grep -n "nomount" common/fs/Makefile
+        cp -a "$NOMOUNT_SRC"/. "$NOMOUNT_DIR"/
+
+        if ! grep -qF 'source "fs/nomount/Kconfig"' "$KCONFIG"; then
+          printf '\nsource "fs/nomount/Kconfig"\n' >> "$KCONFIG"
+        fi
+
+        if ! grep -qF 'obj-$(CONFIG_NOMOUNT) += nomount/' "$MAKEFILE"; then
+          printf '\nobj-$(CONFIG_NOMOUNT) += nomount/\n' >> "$MAKEFILE"
+        fi
+
+        echo "NoMount source:"
+        find "$NOMOUNT_DIR" -maxdepth 2 -type f -print | sort
+
+        echo
+        echo "Kconfig entry:"
+        grep -nF 'source "fs/nomount/Kconfig"' "$KCONFIG"
+
+        echo
+        echo "Makefile entry:"
+        grep -nF 'obj-$(CONFIG_NOMOUNT) += nomount/' "$MAKEFILE"
 
     - name: Enable NoMount Kernel Config
       uses: ./.github/actions/set-kernel-config
       with:
         config_list: |
           CONFIG_NOMOUNT=y
+
+    - name: Verify NoMount Integration
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      run: |
+        set -euo pipefail
+
+        FS_DIR="${{ github.workspace }}/kernel/common/fs"
+        NOMOUNT_DIR="${FS_DIR}/nomount"
+        KCONFIG="${FS_DIR}/Kconfig"
+        MAKEFILE="${FS_DIR}/Makefile"
+
+        echo "========================================"
+        echo "NoMount Verification"
+        echo "========================================"
+
+        if [ ! -d "$NOMOUNT_DIR" ]; then
+          echo "::error::NoMount directory does not exist:"
+          echo "  $NOMOUNT_DIR"
+          exit 1
+        fi
+
+        if [ ! -f "$NOMOUNT_DIR/Kconfig" ]; then
+          echo "::error::NoMount Kconfig not found:"
+          echo "  $NOMOUNT_DIR/Kconfig"
+          exit 1
+        fi
+
+        if ! grep -qF 'source "fs/nomount/Kconfig"' "$KCONFIG"; then
+          echo "::error::fs/Kconfig does not include NoMount"
+          exit 1
+        fi
+
+        if ! grep -qF 'obj-$(CONFIG_NOMOUNT) += nomount/' "$MAKEFILE"; then
+          echo "::error::fs/Makefile does not include NoMount"
+          exit 1
+        fi
+
+        echo "NoMount directory:"
+        ls -la "$NOMOUNT_DIR"
+
+        echo
+        echo "Kconfig:"
+        grep -nF 'source "fs/nomount/Kconfig"' "$KCONFIG"
+
+        echo
+        echo "Makefile:"
+        grep -nF 'obj-$(CONFIG_NOMOUNT) += nomount/' "$MAKEFILE"
+
+        echo
+        echo "NoMount integration verified successfully."
