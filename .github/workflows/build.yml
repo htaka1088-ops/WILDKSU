@@ -126,13 +126,13 @@ jobs:
           os_patch_level: ${{ inputs.os_patch_level }}
 
       - name: Setup KernelSU-Next
-        if: ${{ contains(inputs.feature_set, 'KSUN') || inputs.feature_set == 'FULL' }}
+        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+KSUN+') }}
         uses: ./.github/actions/kernelsu
         with:
           ksu_branch: ${{ inputs.ksu_branch }}
 
       - name: SUSFS
-        if: ${{ contains(inputs.feature_set, 'SUSFS') || inputs.feature_set == 'FULL' }}
+        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+SUSFS+') }}
         uses: ./.github/actions/susfs
         with:
           susfs_commit: ${{ inputs.susfs_commit }}
@@ -143,7 +143,7 @@ jobs:
           sublevel: ${{ steps.extract.outputs.sublevel }}
 
       - name: Baseband Guard
-        if: ${{ contains(inputs.feature_set, 'BBG') || inputs.feature_set == 'FULL' }}
+        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+BBG+') }}
         uses: ./.github/actions/bbg
         with:
           version: ${{ inputs.version }}
@@ -153,7 +153,7 @@ jobs:
           os_patch_level: ${{ inputs.os_patch_level }}
 
       - name: NoMount
-        if: ${{ contains(inputs.feature_set, 'NOMOUNT') || inputs.feature_set == 'FULL' }}
+        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+NOMOUNT+') }}
         uses: ./.github/actions/nomount
         with:
           version: ${{ inputs.version }}
@@ -163,7 +163,7 @@ jobs:
           os_patch_level: ${{ inputs.os_patch_level }}
 
       - name: Setup Networking
-        if: ${{ contains(inputs.feature_set, 'NET') || inputs.feature_set == 'FULL' }}
+        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+NET+') }}
         uses: ./.github/actions/networking
         with:
           version: ${{ inputs.version }}
@@ -172,7 +172,7 @@ jobs:
           sublevel: ${{ steps.extract.outputs.sublevel }}
 
       - name: DroidSpaces-OSS Patches
-        if: ${{ contains(inputs.feature_set, 'DS') || inputs.feature_set == 'FULL' }}
+        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+DS+') }}
         uses: ./.github/actions/droidspaces
         with:
           version: ${{ inputs.version }}

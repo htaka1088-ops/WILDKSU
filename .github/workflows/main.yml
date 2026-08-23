@@ -32,6 +32,7 @@ on:
         description: "Feature Set"
         type: choice
         options:
+          - KSUN+SUSFS+BBG+NET
           - KSUN+SUSFS+BBG+NET+NOMOUNT
           - KSUN+SUSFS+BBG+NOMOUNT
           - KSUN+SUSFS+NOMOUNT

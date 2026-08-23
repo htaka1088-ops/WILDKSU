@@ -9,7 +9,7 @@ on:
         type: string
       feature_set:
         description: "Feature Set"
-        required: false
+        required: true
         type: string
       ksu_branch:
         description: "KernelSU branch or commit (empty = latest dev)"
