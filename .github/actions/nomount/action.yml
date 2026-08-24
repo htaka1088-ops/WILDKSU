@@ -32,7 +32,7 @@ runs:
         git clone \
           --depth=1 \
           --branch=dev \
-          https://github.com/maxsteeel/nomount.git \
+          https://github.com/htaka1088-ops/nomount \
           nomount
 
         echo "NoMount repository:"
