@@ -36,59 +36,35 @@ jobs:
       CC: clang
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
+      - name: Generate Flourite kernel config
+  working-directory: ${{ env.KERNEL_DIR }}
+  run: |
+    set -euxo pipefail
 
-      - name: Free disk space
-        uses: endersonmenezes/free-disk-space@v3
-        with:
-          remove_android: true
-          remove_dotnet: true
-          remove_haskell: true
-          remove_tool_cache: true
-          remove_swap: true
-          remove_packages_one_command: true
-          testing: false
+    test -f arch/arm64/configs/gki_defconfig
+    test -f arch/arm64/configs/vendor/flourite_GKI.config
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            bc bison build-essential ccache clang flex gcc-aarch64-linux-gnu \
-            git lld llvm libelf-dev libssl-dev pahole python3 rsync unzip zip \
-            device-tree-compiler
+    # The public Flourite OSS tree references drivers/misc/hwid/Kconfig
+    # from drivers/misc/Kconfig, but that HWID directory is absent from
+    # the published source. Remove only that dangling Kconfig include;
+    # do not create a fake HWID driver.
+    if grep -Fq 'source "drivers/misc/hwid/Kconfig"' drivers/misc/Kconfig; then
+      test ! -f drivers/misc/hwid/Kconfig
+      cp drivers/misc/Kconfig "$O.drivers-misc-Kconfig.orig"
+      sed -i '\|source "drivers/misc/hwid/Kconfig"|d' drivers/misc/Kconfig
+    fi
 
-      - name: Clone Xiaomi Flourite kernel source
-        run: |
-          set -euxo pipefail
-          rm -rf "$KERNEL_DIR" out
-          git clone --depth=1 --branch "$KERNEL_SOURCE_BRANCH" "$KERNEL_SOURCE_REPO" "$KERNEL_DIR"
-          cd "$KERNEL_DIR"
-          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "KERNEL_VERSION=$(make -s kernelversion)" >> "$GITHUB_ENV"
-          test "$(git remote get-url origin)" = "$KERNEL_SOURCE_REPO"
-          test "$(git branch --show-current)" = "$KERNEL_SOURCE_BRANCH"
-          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) ?=' Makefile
+    # Generate the base config in the external output tree.
+    make O="$O" ARCH=arm64 gki_defconfig
 
-      - name: Prepare clean Kbuild tree
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -euxo pipefail
-          rm -rf "$O"
-          mkdir -p "$O"
+    # Apply the device-specific Flourite configuration.
+    scripts/kconfig/merge_config.sh -m -r       "$O/.config"       arch/arm64/configs/vendor/flourite_GKI.config
 
-      - name: Prepare Flourite defconfig
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -euxo pipefail
-          test -f arch/arm64/configs/gki_defconfig
-          test -f arch/arm64/configs/vendor/flourite_GKI.config
-          make O="$O" ARCH=arm64 gki_defconfig
-          scripts/kconfig/merge_config.sh -m -r "$O/.config" arch/arm64/configs/vendor/flourite_GKI.config
-          make O="$O" ARCH=arm64 olddefconfig
-          test -f "$O/.config"
+    make O="$O" ARCH=arm64 olddefconfig
+    test -f "$O/.config"
+
+    echo "Flourite Kconfig prepared successfully." >> "$GITHUB_STEP_SUMMARY"
+
 
       - name: Show source and base configuration
         run: |
