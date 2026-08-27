@@ -1,3 +1,3 @@
 git add .
-git commit -m "WILD KERNEL"
-git push
+git commit -m "xiaomi"
+git push origin xiaomi

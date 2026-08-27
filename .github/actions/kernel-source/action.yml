@@ -1,0 +1,16 @@
+name: Xiaomi Flourite source
+description: Clone only MiCode/Xiaomi_Kernel_OpenSource flourite-v-oss
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        set -euxo pipefail
+        rm -rf kernel
+        git clone --depth=1 --single-branch --branch flourite-v-oss \
+          https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git kernel
+        test -f kernel/Makefile
+        test -f kernel/arch/arm64/configs/vendor/flourite_GKI.config
+        test -f kernel/arch/arm64/configs/vendor/flourite_consolidate.config
+        echo 'Only Xiaomi Flourite source is used.'

@@ -1,431 +1,153 @@
-name: Kernel Build Process
-
-permissions:
-  contents: write
-  actions: write
+name: Build Flourite 6.1
 
 on:
   workflow_call:
     inputs:
-      version:
-        required: true
-        type: string
-      android_version:
-        required: true
-        type: string
-      kernel_version:
-        required: true
-        type: string
-      sublevel:
-        required: true
-        type: string
-      os_patch_level:
-        required: true
-        type: string
-      variant:
-        required: false
-        type: string
       feature_set:
         required: true
         type: string
-      ksu_branch:
-        required: false
+      ksu_ref:
+        required: true
         type: string
-        default: ""
-      susfs_commit:
-        required: false
+      susfs_ref:
+        required: true
         type: string
-        default: ""
+      build_jobs:
+        required: true
+        type: string
+      lto:
+        required: true
+        type: string
 
 jobs:
-  build-gki:
-    name: "${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }} (${{ inputs.variant }})"
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v7
+      - name: Checkout .github
+        uses: actions/checkout@v4
 
-      - name: Emergency Disk Cleanup
-        if: false
-        uses: ./.github/actions/disk-cleanup
-
-      - name: Free Disk Space
-        if: true
+      - name: Free disk space
         uses: endersonmenezes/free-disk-space@v3
         with:
           remove_android: true
           remove_dotnet: true
           remove_haskell: true
           remove_tool_cache: true
-          remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
+          remove_packages: 'azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* mysql* dotnet-sdk-*'
           remove_packages_one_command: true
-          remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle"
-          rm_cmd: "rmz"
-          rmz_version: "3.1.1"
           testing: false
 
-      - name: Setup Swap
-        uses: pierotofy/set-swap-space@master
-        with:
-          swap-size-gb: 16
-
-      - name: Setup Build Environment
-        uses: ./.github/actions/setup-build-environment
-        env:
-          BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
-
-      - name: Download Kernel Repository
-        uses: ./.github/actions/download-kernel
-        with:
-          version: ${{ inputs.version }}
-          android_version: ${{ inputs.android_version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          os_patch_level: ${{ inputs.os_patch_level }}
-
-      - name: Build FUSE-BPF Userspace Daemon
-        if: ${{ contains(inputs.version, 'lts') && inputs.version == 'android16-6.12' }}
-        uses: ./.github/actions/fuse-bpf
-        with:
-          version: ${{ inputs.version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          android_version: ${{ inputs.android_version }}
-
-      - name: Set Build Timestamp
-        shell: bash
+      - name: Install build dependencies
         run: |
           set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ccache clang flex git libelf-dev liblz4-tool \
+            libssl-dev lld llvm pahole python3 rsync unzip zip zstd libncurses-dev \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
-          SOURCE_DATE_EPOCH=1747814754
-          KBUILD_BUILD_TIMESTAMP="Wed May 21 08:05:54 UTC 2025"
-          GIT_DATE="2025-05-21T08:05:54Z"
-
-          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> "$GITHUB_ENV"
-          echo "KBUILD_BUILD_TIMESTAMP=$KBUILD_BUILD_TIMESTAMP" >> "$GITHUB_ENV"
-          echo "GIT_AUTHOR_DATE=$GIT_DATE" >> "$GITHUB_ENV"
-          echo "GIT_COMMITTER_DATE=$GIT_DATE" >> "$GITHUB_ENV"
-
-      - name: Extract Sublevel and Set File Name
-        id: extract
-        uses: ./.github/actions/extract-sublevel-file-name
+      - name: Setup swap
+        uses: pierotofy/set-swap-space@master
         with:
-          android_version: ${{ inputs.android_version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          sublevel: ${{ inputs.sublevel }}
-          os_patch_level: ${{ inputs.os_patch_level }}
-          variant: ${{ inputs.variant }}
+          swap-size-gb: 12
 
-      - name: Kernel Fixes
-        uses: ./.github/actions/kernel-fixes
-        with:
-          version: ${{ inputs.version }}
-          android_version: ${{ inputs.android_version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          sublevel: ${{ steps.extract.outputs.sublevel }}
-          os_patch_level: ${{ inputs.os_patch_level }}
+      - name: Clone ONLY Xiaomi Flourite kernel source
+        uses: ./.github/actions/kernel-source
 
-      - name: Setup KernelSU-Next
-        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+KSUN+') }}
-        uses: ./.github/actions/kernelsu
+      - name: Record source
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          echo "SOURCE_REPO=https://github.com/MiCode/Xiaomi_Kernel_OpenSource" >> "$GITHUB_ENV"
+          echo "SOURCE_BRANCH=flourite-v-oss" >> "$GITHUB_ENV"
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "KERNEL_VERSION=$(make -s kernelversion)" >> "$GITHUB_ENV"
+          printf '## Source\n\n- Repo: `%s`\n- Branch: `%s`\n- Commit: `%s`\n- Kernel: `%s`\n' \
+            "$SOURCE_REPO" "$SOURCE_BRANCH" "$SOURCE_COMMIT" "$KERNEL_VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: KernelSU-Next
+        if: ${{ contains(inputs.feature_set, 'KSUN') || inputs.feature_set == 'ALL' }}
+        uses: ./.github/actions/kernelsu-next
         with:
-          ksu_branch: ${{ inputs.ksu_branch }}
+          ref: ${{ inputs.ksu_ref }}
 
       - name: SUSFS
-        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+SUSFS+') }}
+        if: ${{ contains(inputs.feature_set, 'SUSFS') || inputs.feature_set == 'ALL' }}
         uses: ./.github/actions/susfs
         with:
-          susfs_commit: ${{ inputs.susfs_commit }}
-          version: ${{ inputs.version }}
-          android_version: ${{ inputs.android_version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          os_patch_level: ${{ inputs.os_patch_level }}
-          sublevel: ${{ steps.extract.outputs.sublevel }}
-
-      - name: Baseband Guard
-        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+BBG+') }}
-        uses: ./.github/actions/bbg
-        with:
-          version: ${{ inputs.version }}
-          android_version: ${{ inputs.android_version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          sublevel: ${{ steps.extract.outputs.sublevel }}
-          os_patch_level: ${{ inputs.os_patch_level }}
+          ref: ${{ inputs.susfs_ref }}
 
       - name: NoMount
-        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+NOMOUNT+') }}
+        if: ${{ contains(inputs.feature_set, 'NOMOUNT') || inputs.feature_set == 'ALL' }}
         uses: ./.github/actions/nomount
-        with:
-          version: ${{ inputs.version }}
-          android_version: ${{ inputs.android_version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          sublevel: ${{ steps.extract.outputs.sublevel }}
-          os_patch_level: ${{ inputs.os_patch_level }}
 
-      - name: Setup Networking
-        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+NET+') }}
+      - name: Baseband Guard
+        if: ${{ contains(inputs.feature_set, 'BBG') || inputs.feature_set == 'ALL' }}
+        uses: ./.github/actions/bbg
+
+      - name: Networking
+        if: ${{ contains(inputs.feature_set, 'NET') || inputs.feature_set == 'ALL' }}
         uses: ./.github/actions/networking
-        with:
-          version: ${{ inputs.version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          android_version: ${{ inputs.android_version }}
-          sublevel: ${{ steps.extract.outputs.sublevel }}
 
-      - name: DroidSpaces-OSS Patches
-        if: ${{ inputs.feature_set == 'FULL' || contains(format('+{0}+', inputs.feature_set), '+DS+') }}
+      - name: DroidSpaces
+        if: ${{ contains(inputs.feature_set, 'DS') || inputs.feature_set == 'ALL' }}
         uses: ./.github/actions/droidspaces
-        with:
-          version: ${{ inputs.version }}
-          kernel_version: ${{ inputs.kernel_version }}
 
-      - name: Apply NTSync Patches
+      - name: NTSync
+        if: ${{ contains(inputs.feature_set, 'NTSYNC') || inputs.feature_set == 'ALL' }}
         uses: ./.github/actions/ntsync
-        with:
-          version: ${{ inputs.version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          sublevel: ${{ steps.extract.outputs.sublevel }}
 
-      - name: Apply Ptrace Patch
-        uses: ./.github/actions/ptrace
-        with:
-          kernel_version: ${{ inputs.kernel_version }}
-
-      - name: Apply Unicode Fix Patch
-        uses: ./.github/actions/unicode-fix
-        with:
-          kernel_version: ${{ inputs.kernel_version }}
-
-      - name: Apply Performance Patches
-        if: false
+      - name: Performance patches
+        if: ${{ contains(inputs.feature_set, 'PERF') || inputs.feature_set == 'ALL' }}
         uses: ./.github/actions/performance
-        with:
-          kernel_version: ${{ inputs.kernel_version }}
 
-      - name: Setup Misc Configs
+      - name: Miscellaneous kernel config
         uses: ./.github/actions/misc
 
-      - name: Enable BTF
-        uses: ./.github/actions/btf
-        with:
-          version: ${{ inputs.version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          sublevel: ${{ steps.extract.outputs.sublevel }}
-
-      - name: Apply Device-Specific Patches
-        uses: ./.github/actions/apply-device-patches
-        with:
-          version: ${{ inputs.version }}
-          kernel_version: ${{ inputs.kernel_version }}
-
-      - name: Apply Kernel Branding
-        uses: ./.github/actions/apply-kernel-branding
-        with:
-          variant: ${{ inputs.variant }}
-          kernel_version: ${{ inputs.kernel_version }}
-          android_version: ${{ inputs.android_version }}
-          version: ${{ inputs.version }}
-          sublevel: ${{ steps.extract.outputs.sublevel }}
-
-      - name: Remove Protected Exports
-        uses: ./.github/actions/remove-protected-exports
-
-      - name: Clean Kernel Flags
-        uses: ./.github/actions/clean-kernel-flags
-
-      - name: Scan and Collect Patch Rejects
-        id: scan
-        if: ${{ always() }}
-        uses: ./.github/actions/scan-patch-rejects
-
-      - name: Upload Rejects
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.extract.outputs.file_name }}-Rejects
-          path: patch-rejects/
-          if-no-files-found: ignore
-          compression-level: 9
-
-      - name: Get Prebuilt Ccache
-        uses: actions/download-artifact@v8
-        with:
-          name: ccache-binary
-          path: ccache-dl
-        continue-on-error: true
-
-      - name: Setup Cache and Build Environment
-        uses: ./.github/actions/cache-setup
-        with:
-          version: ${{ inputs.version }}
-          android_version: ${{ inputs.android_version }}
-          kernel_version: ${{ inputs.kernel_version }}
-          sublevel: ${{ steps.extract.outputs.sublevel }}
-
-      - name: Restore Ccache
-        id: restore-ccache
-        continue-on-error: true
-        if: ${{ false && (inputs.version == 'android12-5.10' || inputs.version == 'android13-5.10' || inputs.version == 'android13-5.15') }}
-        uses: ./.github/actions/cache-restore
-        with:
-          cache_path: /home/runner/.ccache
-          cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
-          cache_bucket: ccache-cache
-          restore_keys: |
-            ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-
-
-      - name: Restore Bazel Cache
-        id: restore-bazel
-        continue-on-error: true
-        if: ${{ false && (inputs.version == 'android14-5.15' || inputs.version == 'android14-6.1' || inputs.version == 'android15-6.6' || inputs.version == 'android16-6.12') }}
-        uses: ./.github/actions/cache-restore
-        with:
-          cache_path: /home/runner/.cache/bazel
-          cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
-          cache_bucket: bazel-cache
-          restore_keys: |
-            ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-
-
-      - name: Cache Ccache
-        uses: actions/cache@v6
-        with:
-          path: /home/runner/.ccache
-          key: ccache-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
-          restore-keys: |
-            ccache-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-
-            ccache-${{ inputs.android_version }}-${{ inputs.kernel_version }}-
-            ccache-
-
-      - name: Cache Bazel
-        uses: actions/cache@v6
-        with:
-          path: /home/runner/.cache/bazel
-          key: bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
-          restore-keys: |
-            bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-
-            bazel-${{ inputs.android_version }}-${{ inputs.kernel_version }}-
-            bazel-
-
-      - name: Check Cache Hit
-        run: |
-          echo "Cache restore status:"
-          CCACHE_HIT="${{ steps.restore-ccache.outputs.cache-hit || 'skipped' }}"
-          BAZEL_HIT="${{ steps.restore-bazel.outputs.cache-hit || 'skipped' }}"
-          echo "  ccache: $CCACHE_HIT"
-          echo "  bazel: $BAZEL_HIT"
-
-      - name: Get Cache Stats
-        uses: ./.github/actions/cache-stats
-        with:
-          clear_stats: true
-
-      - name: Initialize Config Fragment
-        run: touch "${{ github.workspace }}/wild_gki.fragment"
-
-      - name: Build Normal Kernel
+      - name: Apply LTO choice
+        working-directory: kernel
         env:
-          SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
-          KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
+          LTO: ${{ inputs.lto }}
+        run: |
+          set -euxo pipefail
+          case "$LTO" in
+            thin)  scripts/config --enable CONFIG_LTO_CLANG --disable CONFIG_LTO_CLANG_FULL --enable CONFIG_LTO_CLANG_THIN ;;
+            full)  scripts/config --enable CONFIG_LTO_CLANG --enable CONFIG_LTO_CLANG_FULL --disable CONFIG_LTO_CLANG_THIN ;;
+            none)  scripts/config --disable CONFIG_LTO_CLANG --disable CONFIG_LTO_CLANG_FULL --disable CONFIG_LTO_CLANG_THIN ;;
+            *) exit 2 ;;
+          esac
+          make O=out ARCH=arm64 olddefconfig
+
+      - name: Build kernel
         uses: ./.github/actions/build-kernel
         with:
-          version: ${{ inputs.version }}
+          jobs: ${{ inputs.build_jobs }}
 
-      - name: Get Cache Stats
-        uses: ./.github/actions/cache-stats
-        with:
-          clear_stats: false
-  
-      - name: Save Ccache
-        continue-on-error: true
-        if: ${{ false && (inputs.version == 'android12-5.10' || inputs.version == 'android13-5.10' || inputs.version == 'android13-5.15') }}
-        uses: ./.github/actions/cache-save
-        with:
-          cache_path: /home/runner/.ccache
-          cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
-          cache_bucket: ccache-cache
-          compression_level: 9
-          github_token: ${{ secrets.MY_GITHUB_TOKEN }}
+      - name: Package AnyKernel3
+        uses: ./.github/actions/package-anykernel3
 
-      - name: Save Bazel Cache
-        continue-on-error: true
-        if: ${{ false && (inputs.version == 'android14-5.15' || inputs.version == 'android14-6.1' || inputs.version == 'android15-6.6' || inputs.version == 'android16-6.12') }}
-        uses: ./.github/actions/cache-save
-        with:
-          cache_path: /home/runner/.cache/bazel
-          cache_key: ${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ steps.extract.outputs.sublevel }}-${{ inputs.os_patch_level }}
-          cache_bucket: bazel-cache
-          compression_level: 9
-          github_token: ${{ secrets.MY_GITHUB_TOKEN }}
+      - name: Scan patch rejects
+        uses: ./.github/actions/scan-patch-rejects
 
-      - name: Consolidated Build Summary
-        if: ${{ always() }}
-        shell: bash
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flourite-6.1-${{ github.run_number }}
+          path: |
+            AnyKernel3/
+            build-info/
+            patch-rejects/
+          if-no-files-found: error
+          compression-level: 9
+
+      - name: Build summary
+        if: always()
         run: |
-          SUMMARY_FILE="/tmp/build-summary-${{ steps.extract.outputs.file_name }}.md"
-
-          if [ "${{ job.status }}" = "success" ]; then
-            STATUS="✅ Success"
-          else
-            STATUS="❌ Failed"
-          fi
-
-          KERNEL_VER_STR=""
-          if [ -f "/home/runner/out/dist/Image" ]; then
-            KERNEL_VER_STR=$(strings "/home/runner/out/dist/Image" | grep -m1 "^Linux version " | sed 's/Linux version //' || echo "")
-          elif [ -f "/home/runner/out/Image" ]; then
-            KERNEL_VER_STR=$(strings "/home/runner/out/Image" | grep -m1 "^Linux version " | sed 's/Linux version //' || echo "")
-          fi
-
-          KSU_VER="${KSU_VERSION:-N/A}"
-          KSU_TAG="${KSU_GIT_TAG:-N/A}"
-
-          SUSFS_VER="N/A"
-          if [ -f "${{ github.workspace }}/kernel/common/include/linux/susfs.h" ]; then
-            SUSFS_VER=$(grep '#define SUSFS_VERSION' "${{ github.workspace }}/kernel/common/include/linux/susfs.h" | awk -F'"' '{print $2}' || echo "N/A")
-          fi
-
-          CCACHE_HIT="${CCACHE_HIT_RATE:-N/A}"
-          BUILD_TIME="N/A"
-          WARNINGS="N/A"
-
           {
-            echo "## ${{ inputs.android_version }} ${{ inputs.kernel_version }}.${{ inputs.sublevel }} (${{ inputs.variant }}) — ${STATUS}"
-            echo
-            echo "| Metric | Value |"
-            echo "|--------|-------|"
-            echo "| **Status** | ${STATUS} |"
-            echo "| **Kernel** | ${{ inputs.kernel_version }}.${{ inputs.sublevel }}-${{ inputs.android_version }}-${{ inputs.os_patch_level }} |"
-
-            if [ -n "$KERNEL_VER_STR" ]; then
-              echo "| **Version String** | \`${KERNEL_VER_STR}\` |"
-            fi
-
-            echo "| **KSU Version** | ${KSU_VER} |"
-            echo "| **KSU Tag** | ${KSU_TAG} |"
-            echo "| **SUSFS Version** | ${SUSFS_VER} |"
-            echo "| **Feature Set** | ${{ inputs.feature_set }} |"
-            echo "| **Variant** | ${{ inputs.variant }} |"
-            echo
-
-            if [ -f /tmp/kernel-fixes-summary.md ]; then
-              echo "### 🔧 Kernel Fixes"
-              cat /tmp/kernel-fixes-summary.md
-              echo
-            fi
-          } > "$SUMMARY_FILE"
-
-      - name: Upload Build Summary Artifact
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.extract.outputs.file_name }}-Summary
-          path: /tmp/build-summary-${{ steps.extract.outputs.file_name }}.md
-          if-no-files-found: ignore
-          compression-level: 9
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.extract.outputs.file_name }}-AnyKernel3
-          path: ${{ github.workspace }}/AnyKernel3/**
-          if-no-files-found: ignore
-          compression-level: 9
+            echo ''
+            echo '## Build result'
+            echo "- Feature set: \\`${{ inputs.feature_set }}\\`"
+            echo "- LTO: \\`${{ inputs.lto }}\\`"
+            echo "- Source: \\`${SOURCE_REPO}@${SOURCE_COMMIT}\\`"
+          } >> "$GITHUB_STEP_SUMMARY"

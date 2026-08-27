@@ -1,0 +1,27 @@
+name: Package AnyKernel3
+description: Package the built Image using AnyKernel3
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        set -euxo pipefail
+        rm -rf AnyKernel3-packaged
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3-packaged
+        rm -rf AnyKernel3-packaged/*
+        cp AnyKernel3/Image AnyKernel3-packaged/Image
+        for f in AnyKernel3/Image.* AnyKernel3/*.dtb; do [ -f "$f" ] && cp -f "$f" AnyKernel3-packaged/ || true; done
+        cat > AnyKernel3-packaged/anykernel.sh <<'AK'
+        properties() {
+          kernel.string=Flourite-Xiaomi-Kernel
+        }
+        block=/dev/block/by-name/boot
+        is_slot_device=auto
+        . tools/ak3-core.sh
+        replace_kernel
+        AK
+        cd AnyKernel3-packaged
+        zip -r -9 ../flourite-6.1-AnyKernel3.zip . -x '.git/*'
+        mkdir -p ../AnyKernel3
+        mv ../flourite-6.1-AnyKernel3.zip ../AnyKernel3/

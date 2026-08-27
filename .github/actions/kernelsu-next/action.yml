@@ -1,0 +1,22 @@
+name: KernelSU-Next
+description: Integrate KernelSU-Next directly into the Flourite source tree
+inputs:
+  ref:
+    required: true
+    default: next-susfs
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      env:
+        KSU_REF: ${{ inputs.ref }}
+      run: |
+        set -euxo pipefail
+        curl --fail --location --proto '=https' -LSs \
+          https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next-susfs/kernel/setup.sh \
+          | bash -s "$KSU_REF"
+        test -d KernelSU-Next/kernel
+        scripts/config --enable CONFIG_KSU
+        make O=out ARCH=arm64 olddefconfig
+        echo "KernelSU-Next ref: $KSU_REF" >> "$GITHUB_STEP_SUMMARY"
