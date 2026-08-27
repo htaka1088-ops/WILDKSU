@@ -1,0 +1,44 @@
+name: 'Download Flourite Kernel'
+description: 'Clone only the Xiaomi Flourite OSS kernel source'
+
+inputs:
+  repository:
+    description: 'Kernel repository'
+    required: false
+    default: 'https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git'
+  branch:
+    description: 'Kernel source branch'
+    required: false
+    default: 'flourite-v-oss'
+
+runs:
+  using: composite
+  steps:
+    - name: Clone Flourite source
+      shell: bash
+      run: |
+        set -euo pipefail
+        rm -rf "${{ github.workspace }}/kernel"
+        git clone --depth=1 --branch "${{ inputs.branch }}" "${{ inputs.repository }}" "${{ github.workspace }}/kernel"
+        cd "${{ github.workspace }}/kernel"
+        git fetch --depth=1 origin "${{ inputs.branch }}"
+        echo "SOURCE_REPO=${{ inputs.repository }}" >> "$GITHUB_ENV"
+        echo "SOURCE_BRANCH=${{ inputs.branch }}" >> "$GITHUB_ENV"
+        echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+        echo "SOURCE_KERNEL_VERSION=$(make -s kernelversion)" >> "$GITHUB_ENV"
+        echo "Flourite source: $(git rev-parse --short HEAD)"
+        echo "Kernel version: $(make -s kernelversion)"
+
+    - name: Source summary
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      run: |
+        set -euo pipefail
+        {
+          echo "## Kernel Source"
+          echo
+          echo "- Repository: \`${SOURCE_REPO}\`"
+          echo "- Branch: \`${SOURCE_BRANCH}\`"
+          echo "- Commit: \`${SOURCE_COMMIT}\`"
+          echo "- Kernel: \`${SOURCE_KERNEL_VERSION}\`"
+        } >> "$GITHUB_STEP_SUMMARY"

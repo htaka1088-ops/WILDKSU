@@ -1,28 +1,33 @@
-name: Networking
-description: Enable networking features that are native to the Flourite 6.1 tree; no 5.15 BBRv3 backport
+name: 'Setup Networking'
+description: 'Set up all networking options (IP Set, TCP CC, Qdisc, BBRv3, CIFS, Wireguard)'
+inputs:
+  version:
+    description: 'Kernel config version (e.g., android15-6.6)'
+    required: true
+  kernel_version:
+    description: 'Kernel version (e.g., 6.1)'
+    required: true
+  android_version:
+    description: 'Android version (e.g., android14)'
+    required: true
+  sublevel:
+    description: 'Kernel sublevel'
+    required: true
+
 runs:
-  using: composite
+  using: "composite"
   steps:
-    - shell: bash
-      working-directory: ${{ github.workspace }}/kernel
-      run: |
-        set -euxo pipefail
-        # Do not apply the old 5.15/6.12 BBRv3 patches from the previous .github.
-        # Linux 6.1 already contains BBR and the required qdisc infrastructure.
-        for cfg in \
-          CONFIG_INET \
-          CONFIG_TCP_CONG_BBR \
-          CONFIG_NET_SCH_FQ \
-          CONFIG_NET_SCH_FQ_CODEL \
-          CONFIG_NET_CLS_ACT \
-          CONFIG_NET_CLS_BPF \
-          CONFIG_NET_CLS_CGROUP \
-          CONFIG_IP_SET \
-          CONFIG_IP_SET_MAX \
-          CONFIG_WIREGUARD; do
-          scripts/config --enable "$cfg" || true
-        done
-        scripts/config --enable CONFIG_CIFS || true
-        scripts/config --enable CONFIG_CIFS_XATTR || true
-        scripts/config --enable CONFIG_CIFS_POSIX || true
-        make O=out ARCH=arm64 olddefconfig
+    - name: Setup Networking Configs
+      uses: ./.github/actions/networking-config
+
+    - name: Apply BBRv3 Patches
+      uses: ./.github/actions/bbrv3
+      with:
+        version: ${{ inputs.version }}
+        kernel_version: ${{ inputs.kernel_version }}
+        sublevel: ${{ inputs.sublevel }}
+
+    - name: Setup CIFS Configs
+      uses: ./.github/actions/cifs
+      with:
+        version: ${{ inputs.version }}

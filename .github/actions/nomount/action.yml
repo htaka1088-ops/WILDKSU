@@ -1,20 +1,161 @@
-name: NoMount
-description: Integrate NoMount into a normal kernel source tree
+name: Setup NoMount
+description: Integrate NoMount into the kernel source tree
+
+inputs:
+  version:
+    description: Kernel version identifier
+    required: true
+  android_version:
+    description: Android version
+    required: true
+  kernel_version:
+    description: Kernel version
+    required: true
+  sublevel:
+    description: Kernel sublevel
+    required: true
+  os_patch_level:
+    description: Android security patch level
+    required: true
+
 runs:
   using: composite
   steps:
-    - shell: bash
+    - name: Clone NoMount
+      shell: bash
       working-directory: ${{ github.workspace }}
       run: |
-        set -euxo pipefail
+        set -euo pipefail
+
         rm -rf nomount
-        git clone --depth=1 https://github.com/maxsteeel/nomount.git nomount
-        SRC="nomount/kernel"
-        test -d "$SRC"
-        rm -rf kernel/fs/nomount
-        mkdir -p kernel/fs/nomount
-        rsync -a "$SRC"/ kernel/fs/nomount/
-        grep -qF 'source "fs/nomount/Kconfig"' kernel/fs/Kconfig || printf '\nsource "fs/nomount/Kconfig"\n' >> kernel/fs/Kconfig
-        grep -qF 'obj-$(CONFIG_NOMOUNT) += nomount/' kernel/fs/Makefile || printf '\nobj-$(CONFIG_NOMOUNT) += nomount/\n' >> kernel/fs/Makefile
-        scripts/config --enable CONFIG_NOMOUNT
-        make O=kernel/out ARCH=arm64 olddefconfig
+
+        git clone \
+          --depth=1 \
+          --branch=dev \
+          https://github.com/htaka1088-ops/nomount \
+          nomount
+
+        echo "NoMount repository:"
+        git -C nomount rev-parse --short HEAD
+        git -C nomount branch --show-current
+
+    - name: Integrate NoMount
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      run: |
+        set -euo pipefail
+
+        NOMOUNT_SRC="${{ github.workspace }}/nomount/kernel/src"
+        FS_DIR="${{ github.workspace }}/kernel/fs"
+        NOMOUNT_DIR="${FS_DIR}/nomount"
+        KCONFIG="${FS_DIR}/Kconfig"
+        MAKEFILE="${FS_DIR}/Makefile"
+
+        echo "========================================"
+        echo "NoMount Integration"
+        echo "========================================"
+        echo "Build:       ${{ inputs.version }}"
+        echo "Android:     ${{ inputs.android_version }}"
+        echo "Kernel:      ${{ inputs.kernel_version }}"
+        echo "Sublevel:    ${{ inputs.sublevel }}"
+        echo "Patch level: ${{ inputs.os_patch_level }}"
+        echo "========================================"
+
+        if [ ! -d "$NOMOUNT_SRC" ]; then
+          echo "::error::NoMount source directory not found:"
+          echo "  $NOMOUNT_SRC"
+          exit 1
+        fi
+
+        if [ ! -f "$KCONFIG" ]; then
+          echo "::error::Kernel fs/Kconfig not found:"
+          echo "  $KCONFIG"
+          exit 1
+        fi
+
+        if [ ! -f "$MAKEFILE" ]; then
+          echo "::error::Kernel fs/Makefile not found:"
+          echo "  $MAKEFILE"
+          exit 1
+        fi
+
+        rm -rf "$NOMOUNT_DIR"
+        mkdir -p "$NOMOUNT_DIR"
+
+        cp -a "$NOMOUNT_SRC"/. "$NOMOUNT_DIR"/
+
+        if ! grep -qF 'source "fs/nomount/Kconfig"' "$KCONFIG"; then
+          printf '\nsource "fs/nomount/Kconfig"\n' >> "$KCONFIG"
+        fi
+
+        if ! grep -qF 'obj-$(CONFIG_NOMOUNT) += nomount/' "$MAKEFILE"; then
+          printf '\nobj-$(CONFIG_NOMOUNT) += nomount/\n' >> "$MAKEFILE"
+        fi
+
+        echo "NoMount source:"
+        find "$NOMOUNT_DIR" -maxdepth 2 -type f -print | sort
+
+        echo
+        echo "Kconfig entry:"
+        grep -nF 'source "fs/nomount/Kconfig"' "$KCONFIG"
+
+        echo
+        echo "Makefile entry:"
+        grep -nF 'obj-$(CONFIG_NOMOUNT) += nomount/' "$MAKEFILE"
+
+    - name: Enable NoMount Kernel Config
+      uses: ./.github/actions/set-kernel-config
+      with:
+        config_list: |
+          CONFIG_NOMOUNT=y
+
+    - name: Verify NoMount Integration
+      shell: bash
+      working-directory: ${{ github.workspace }}/kernel
+      run: |
+        set -euo pipefail
+
+        FS_DIR="${{ github.workspace }}/kernel/fs"
+        NOMOUNT_DIR="${FS_DIR}/nomount"
+        KCONFIG="${FS_DIR}/Kconfig"
+        MAKEFILE="${FS_DIR}/Makefile"
+
+        echo "========================================"
+        echo "NoMount Verification"
+        echo "========================================"
+
+        if [ ! -d "$NOMOUNT_DIR" ]; then
+          echo "::error::NoMount directory does not exist:"
+          echo "  $NOMOUNT_DIR"
+          exit 1
+        fi
+
+        if [ ! -f "$NOMOUNT_DIR/Kconfig" ]; then
+          echo "::error::NoMount Kconfig not found:"
+          echo "  $NOMOUNT_DIR/Kconfig"
+          exit 1
+        fi
+
+        if ! grep -qF 'source "fs/nomount/Kconfig"' "$KCONFIG"; then
+          echo "::error::fs/Kconfig does not include NoMount"
+          exit 1
+        fi
+
+        if ! grep -qF 'obj-$(CONFIG_NOMOUNT) += nomount/' "$MAKEFILE"; then
+          echo "::error::fs/Makefile does not include NoMount"
+          exit 1
+        fi
+
+        echo "NoMount directory:"
+        ls -la "$NOMOUNT_DIR"
+
+        echo
+        echo "Kconfig:"
+        grep -nF 'source "fs/nomount/Kconfig"' "$KCONFIG"
+
+        echo
+        echo "Makefile:"
+        grep -nF 'obj-$(CONFIG_NOMOUNT) += nomount/' "$MAKEFILE"
+
+        echo
+        echo "NoMount integration verified successfully."
