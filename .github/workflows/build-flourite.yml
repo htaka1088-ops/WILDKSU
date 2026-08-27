@@ -76,7 +76,6 @@ jobs:
         working-directory: ${{ env.KERNEL_DIR }}
         run: |
           set -euxo pipefail
-          make mrproper
           rm -rf "$O"
           mkdir -p "$O"
 
