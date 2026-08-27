@@ -1,72 +1,100 @@
-name: Build Flourite Kernel
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+name: Flourite Kernel • ReSukiSU + SUSFS
 
 on:
   workflow_dispatch:
     inputs:
-      resukisu_ref:
-        description: "ReSukiSU branch/tag/commit"
+      ksu_branch:
+        description: "ReSukiSU branch or commit (default: main)"
         required: false
         type: string
         default: "main"
+      clean_build:
+        description: "Clean build without ReSukiSU/SUSFS/optional patches"
+        required: false
+        type: boolean
+        default: false
       enable_susfs:
         description: "Enable SUSFS"
         required: false
         type: boolean
         default: true
-      enable_zram:
-        description: "Enable Flourite ZRAM enhancements"
+      use_zram:
+        description: "Enable ZRAM/LZ4 enhancement stack"
         required: false
         type: boolean
         default: false
-      enable_bbg:
+      use_bbg:
         description: "Enable Baseband Guard"
         required: false
         type: boolean
         default: false
-      enable_rekernel:
+      use_rekernel:
         description: "Enable Re-Kernel"
         required: false
         type: boolean
         default: false
-      enable_droidspaces:
-        description: "Enable DroidSpaces/NTSync patches"
+      cve_2026_43499_patch:
+        description: "Apply CVE-2026-43499 6.1 patch chain when applicable"
+        required: false
+        type: boolean
+        default: true
+      droidspaces:
+        description: "Droidspaces SYSVIPC kABI patch slot"
+        required: false
+        type: choice
+        options:
+          - "off"
+          - "678"
+          - "123"
+          - "345"
+        default: "off"
+      droidspaces_ntsync:
+        description: "Enable Droidspaces NTSync"
         required: false
         type: boolean
         default: false
       build_bypass:
-        description: "Build a second Bypass Image"
+        description: "Also build module-version bypass Image"
         required: false
         type: boolean
         default: false
+      version:
+        description: "Optional local version suffix"
+        required: false
+        type: string
+        default: ""
       build_time:
-        description: "UTC build timestamp; leave N for current time"
+        description: "UTC build timestamp, or N for current UTC"
         required: false
         type: string
         default: "N"
 
 permissions:
-  contents: read
+  contents: write
+  actions: write
+
+concurrency:
+  group: flourite-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  SOURCE_REPO: https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git
+  SOURCE_BRANCH: flourite-v-oss
+  KERNEL_VERSION_EXPECTED: "6.1.68"
+  ARCH: arm64
 
 jobs:
   build:
-    name: Flourite 6.1
-    runs-on: ubuntu-24.04
+    name: "Flourite 6.1 • ReSukiSU/SUSFS"
+    runs-on: ubuntu-latest
     timeout-minutes: 180
-    env:
-      KERNEL_REPO: https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git
-      KERNEL_BRANCH: flourite-v-oss
-      KERNEL_DIR: ${{ github.workspace }}/kernel
-      OUT_DIR: ${{ github.workspace }}/kernel/out
-      SUSFS_REPO: https://gitlab.com/simonpunk/susfs4ksu.git
-      SUSFS_BRANCH: gki-android14-6.1
-      RESUKISU_REPO: https://github.com/ReSukiSU/ReSukiSU.git
 
     steps:
-      - name: Checkout build repository
-        uses: actions/checkout@v4
+      - name: Checkout WILDKSU
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
 
       - name: Free disk space
         uses: endersonmenezes/free-disk-space@v3
@@ -76,7 +104,6 @@ jobs:
           remove_haskell: true
           remove_tool_cache: true
           remove_swap: true
-          remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-*"
           remove_packages_one_command: true
           testing: false
 
@@ -85,296 +112,452 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison build-essential ccache clang-18 curl flex \
-            libelf-dev libssl-dev lld-18 llvm-18 pahole \
-            python3 python3-pip rsync unzip zip git wget \
-            device-tree-compiler
+            bc bison build-essential ccache clang lld llvm \
+            flex libelf-dev libssl-dev pahole \
+            python3 python3-pip rsync \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            device-tree-compiler libdw-dev \
+            git curl wget unzip zip perl
 
-      - name: Configure compiler
+      - name: Configure ccache
         run: |
           set -euxo pipefail
-          echo "PATH=/usr/lib/llvm-18/bin:$PATH" >> "$GITHUB_ENV"
-          echo "CC=clang" >> "$GITHUB_ENV"
-          echo "LD=ld.lld" >> "$GITHUB_ENV"
-          echo "LLVM=1" >> "$GITHUB_ENV"
-          echo "LLVM_IAS=1" >> "$GITHUB_ENV"
-          clang --version
-          ld.lld --version
+          ccache --version
+          ccache --max-size=4G
+          ccache --set-config=compression=true
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
 
-      - name: Clone ONLY Xiaomi Flourite kernel source
+      - name: Restore ccache
+        uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: flourite-6.1.68-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            flourite-6.1.68-${{ runner.os }}-
+
+      - name: Clone Flourite kernel source
         run: |
           set -euxo pipefail
-          rm -rf "$KERNEL_DIR"
-          git clone --depth=1 --branch "$KERNEL_BRANCH" "$KERNEL_REPO" "$KERNEL_DIR"
-          cd "$KERNEL_DIR"
+          rm -rf "$RUNNER_TEMP/flourite"
+          git clone --depth=1 --single-branch --branch "$SOURCE_BRANCH" "$SOURCE_REPO" "$RUNNER_TEMP/flourite"
+          echo "KERNEL_ROOT=$RUNNER_TEMP/flourite" >> "$GITHUB_ENV"
 
-          echo "KERNEL_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "KERNEL_VERSION=$(make -s kernelversion)" >> "$GITHUB_ENV"
+          cd "$RUNNER_TEMP/flourite"
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          SOURCE_VERSION="$(make -s kernelversion)"
+          echo "SOURCE_COMMIT=$SOURCE_COMMIT" >> "$GITHUB_ENV"
+          echo "SOURCE_VERSION=$SOURCE_VERSION" >> "$GITHUB_ENV"
 
-          test -f Makefile
-          test -f arch/arm64/configs/vendor/flourite_GKI.config
-          test -d drivers
-          test -d arch/arm64
+          test "$SOURCE_VERSION" = "$KERNEL_VERSION_EXPECTED"
+          echo "## Kernel source" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Repo: \`$SOURCE_REPO\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Branch: \`$SOURCE_BRANCH\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`$SOURCE_COMMIT\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Kernel: \`$SOURCE_VERSION\`" >> "$GITHUB_STEP_SUMMARY"
 
-          echo "Kernel source: $KERNEL_REPO"
-          echo "Kernel branch: $KERNEL_BRANCH"
-          echo "Kernel commit: $(git rev-parse HEAD)"
-          echo "Kernel version: $(make -s kernelversion)"
-
-      - name: Prepare clean kernel tree
-        working-directory: ${{ env.KERNEL_DIR }}
+      - name: Prepare external repositories
+        if: inputs.clean_build != true
         run: |
           set -euxo pipefail
-          # This removes generated files only; the cloned Xiaomi source remains the
-          # only kernel source tree used by the build.
-          make ARCH=arm64 mrproper
-          rm -rf "$OUT_DIR"
-          mkdir -p "$OUT_DIR"
+          cd "$RUNNER_TEMP"
 
-      - name: Add ReSukiSU
-        working-directory: ${{ env.KERNEL_DIR }}
+          git clone --depth=1 https://github.com/ReSukiSU-GKI/AnyKernel3.git AnyKernel3
+          git clone --depth=1 https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1 susfs4ksu
+          git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git SukiSU_patch
+
+          echo "ANYKERNEL3=$RUNNER_TEMP/AnyKernel3" >> "$GITHUB_ENV"
+          echo "SUSFS4KSU=$RUNNER_TEMP/susfs4ksu" >> "$GITHUB_ENV"
+          echo "SUKISU_PATCHES=$RUNNER_TEMP/SukiSU_patch" >> "$GITHUB_ENV"
+
+          SUSFS_DATE="$(git -C "$RUNNER_TEMP/susfs4ksu" log -1 --date=format:'%Y-%m-%d %H:%M:%S %z' --format='%cd')"
+          echo "SUSFS_LATEST_COMMIT_DATE=$SUSFS_DATE" >> "$GITHUB_ENV"
+
+      - name: Apply ReSukiSU
+        if: inputs.clean_build != true
+        working-directory: ${{ env.KERNEL_ROOT }}
+        env:
+          KSU_BRANCH: ${{ inputs.ksu_branch }}
         run: |
           set -euxo pipefail
-          echo "Installing ReSukiSU ref: ${{ inputs.resukisu_ref }}"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh \
-            | bash -s -- "${{ inputs.resukisu_ref }}"
+          if [ -z "$KSU_BRANCH" ]; then
+            KSU_BRANCH=main
+          fi
 
-          test -d KernelSU/kernel
-          test -L drivers/kernelsu
-          grep -q 'kernelsu' drivers/Makefile
-          grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig
+          curl -LSs https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh \
+            | bash -s -- -s "$KSU_BRANCH"
 
-          echo "RESUKISU_COMMIT=$(git -C KernelSU rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "RESUKISU_TAG=$(git -C KernelSU describe --tags --always 2>/dev/null || true)" >> "$GITHUB_ENV"
+          test -d KernelSU
+          echo "KernelSU directory created"
+          echo "KSU_BRANCH=$KSU_BRANCH" >> "$GITHUB_ENV"
 
-      - name: Clone SUSFS
-        if: inputs.enable_susfs
-        run: |
-          set -euxo pipefail
-          rm -rf "$GITHUB_WORKSPACE/susfs4ksu"
-          git clone --depth=1 --branch "$SUSFS_BRANCH" "$SUSFS_REPO" "$GITHUB_WORKSPACE/susfs4ksu"
-          test -f "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
-          test -f "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+          KSU_COMMIT="$(git -C KernelSU rev-parse HEAD)"
+          KSU_DATE="$(git -C KernelSU log -1 --date=format:'%Y-%m-%d %H:%M:%S %z' --format='%cd')"
+          echo "KSU_COMMIT=$KSU_COMMIT" >> "$GITHUB_ENV"
+          echo "KSU_LATEST_COMMIT_DATE=$KSU_DATE" >> "$GITHUB_ENV"
 
-      - name: Apply SUSFS to Flourite tree
-        if: inputs.enable_susfs
-        working-directory: ${{ env.KERNEL_DIR }}
+      - name: Apply SUSFS to Flourite source tree
+        if: inputs.clean_build != true && inputs.enable_susfs
+        working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -euxo pipefail
 
-          # ReSukiSU already supplies the KSU integration. The SUSFS kernel tree
-          # changes are applied directly to the Xiaomi source root, not to an ACK
-          # "common/" tree.
-          cp "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/"* fs/
-          cp "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/"* include/linux/
+          PATCH="$SUSFS4KSU/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
+          test -f "$PATCH"
 
-          SUSFS_PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch"
+          cp -a "$SUSFS4KSU/kernel_patches/fs/." ./fs/
+          cp -a "$SUSFS4KSU/kernel_patches/include/linux/." ./include/linux/
 
-          if patch --dry-run -p1 --forward < "$SUSFS_PATCH" >/tmp/susfs-dryrun.log 2>&1; then
-            patch -p1 --forward < "$SUSFS_PATCH"
+          if patch -p1 --dry-run < "$PATCH" >/dev/null 2>&1; then
+            patch -p1 < "$PATCH"
           else
-            cat /tmp/susfs-dryrun.log
-            echo "::error::The stock SUSFS 6.1 patch does not cleanly apply to Xiaomi flourite-v-oss."
-            echo "A source-specific SUSFS patch is required; the workflow will not silently ignore it."
+            echo "::error::SUSFS 6.1 patch does not cleanly apply to flourite-v-oss"
+            patch -p1 --dry-run < "$PATCH" || true
             exit 1
           fi
 
-          # ReSukiSU's kernel contains the KSU/SUSFS integration path, so do not
-          # apply the official-KernelSU-only 10_enable_susfs_for_ksu.patch here.
-          test -f fs/susfs.c
-          test -f include/linux/susfs.h || test -f include/linux/susfs_def.h
-
-      - name: Apply optional ZRAM enhancement
-        if: inputs.enable_zram
-        working-directory: ${{ env.KERNEL_DIR }}
+      - name: Apply CVE-2026-43499 patch chain
+        if: inputs.clean_build != true && inputs.cve_2026_43499_patch
+        working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -euxo pipefail
-          if [ -f "$GITHUB_WORKSPACE/zram/apply_lz4_neon.sh" ]; then
-            cp -r "$GITHUB_WORKSPACE/zram/lz4/"* lib/lz4/
-            cp -r "$GITHUB_WORKSPACE/zram/include/linux/"* include/linux/
-            bash "$GITHUB_WORKSPACE/zram/apply_lz4_neon.sh"
+          PATCHER="$GITHUB_WORKSPACE/security_patch/apply_cve_2026_43499.sh"
+          if [ -x "$PATCHER" ] || [ -f "$PATCHER" ]; then
+            bash "$PATCHER" 6.1 68 "$GITHUB_WORKSPACE/security_patch"
+          else
+            echo "::warning::CVE patcher not present; skipping."
           fi
 
-      - name: Apply optional Baseband Guard
-        if: inputs.enable_bbg
-        working-directory: ${{ env.KERNEL_DIR }}
+      - name: Apply ZRAM/LZ4 enhancement
+        if: inputs.clean_build != true && inputs.use_zram
+        working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -euxo pipefail
-          wget -qO- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
-          grep -q 'CONFIG_BBG' arch/arm64/configs/vendor/flourite_GKI.config || \
-            echo 'CONFIG_BBG=y' >> arch/arm64/configs/vendor/flourite_GKI.config
 
-      - name: Apply optional Re-Kernel
-        if: inputs.enable_rekernel
-        working-directory: ${{ env.KERNEL_DIR }}
+          rm -f lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c \
+                lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c
+
+          cp -a "$GITHUB_WORKSPACE/zram/lz4/." lib/lz4/
+          cp -a "$GITHUB_WORKSPACE/zram/include/linux/." include/linux/
+          bash "$GITHUB_WORKSPACE/zram/apply_lz4_neon.sh"
+
+          if [ -f fs/f2fs/Makefile ] && ! grep -qF 'f2fs-$(CONFIG_F2FS_IOSTAT) += iostat.o' fs/f2fs/Makefile; then
+            echo 'f2fs-$(CONFIG_F2FS_IOSTAT) += iostat.o' >> fs/f2fs/Makefile
+          fi
+
+          # Preserve the original WILDKSU LZ4KD/LZ4K_OPLUS stack.
+          cp -a "$SUKISU_PATCHES/other/zram/lz4k/include/linux/." include/linux/
+          cp -a "$SUKISU_PATCHES/other/zram/lz4k/lib/." lib/
+          cp -a "$SUKISU_PATCHES/other/zram/lz4k/crypto/." crypto/
+          cp -a "$SUKISU_PATCHES/other/zram/lz4k_oplus" lib/
+
+          for p in lz4kd.patch lz4k_oplus.patch; do
+            src="$SUKISU_PATCHES/other/zram/zram_patch/6.1/$p"
+            if [ ! -f "$src" ]; then
+              echo "::error::Missing $src"
+              exit 1
+            fi
+            patch -p1 -F 3 < "$src"
+          done
+
+      - name: Apply BBG
+        if: inputs.clean_build != true && inputs.use_bbg
+        working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -euxo pipefail
-          tmp="$(mktemp -d)"
-          git clone --depth=1 https://github.com/Sakion-Team/Re-Kernel.git "$tmp/Re-Kernel"
+          curl -LSs https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
+          grep -q '^CONFIG_BBG=y$' arch/arm64/configs/gki_defconfig || \
+            echo 'CONFIG_BBG=y' >> arch/arm64/configs/gki_defconfig
+
+          if grep -q '^config LSM$' security/Kconfig; then
+            sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
+          fi
+
+      - name: Apply Re-Kernel
+        if: inputs.clean_build != true && inputs.use_rekernel
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -euxo pipefail
+          rm -rf /tmp/rekernel
+          git clone --depth=1 https://github.com/Sakion-Team/Re-Kernel.git /tmp/rekernel
+
           mkdir -p drivers/rekernel
-          cp "$tmp/Re-Kernel/LKM-Source/rekernel.c" drivers/rekernel/
-          cp "$tmp/Re-Kernel/LKM-Source/rekernel.h" drivers/rekernel/
+          cp /tmp/rekernel/LKM-Source/rekernel.c drivers/rekernel/
+          cp /tmp/rekernel/LKM-Source/rekernel.h drivers/rekernel/
+
           cat > drivers/rekernel/Kconfig <<'EOF'
           menu "Re:Kernel"
           config REKERNEL
-            tristate "Re:Kernel driver"
-            default y
+              bool "Re:Kernel support"
+              default y
+          config REKERNEL_NETWORK
+              bool "Re:Kernel NetReceive support"
+              depends on REKERNEL
+              default n
           endmenu
           EOF
-          printf '\nobj-$(CONFIG_REKERNEL) += rekernel/\n' >> drivers/Makefile
-          printf '\nsource "drivers/rekernel/Kconfig"\n' >> drivers/Kconfig
-          echo 'CONFIG_REKERNEL=y' >> arch/arm64/configs/vendor/flourite_GKI.config
 
-      - name: Apply optional DroidSpaces NTSync
-        if: inputs.enable_droidspaces
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -euxo pipefail
-          git clone --depth=1 https://github.com/Goldzxcbug/Droidspaces_Kernel_patch.git /tmp/droidspaces
-          test -f /tmp/droidspaces/NTsync/ntsync_base.patch
-          patch --dry-run -p1 --forward < /tmp/droidspaces/NTsync/ntsync_base.patch
-          patch -p1 --forward < /tmp/droidspaces/NTsync/ntsync_base.patch
-          if [ -f /tmp/droidspaces/NTsync/ntsync_6.1.patch ]; then
-            patch --dry-run -p1 --forward < /tmp/droidspaces/NTsync/ntsync_6.1.patch
-            patch -p1 --forward < /tmp/droidspaces/NTsync/ntsync_6.1.patch
-          fi
-          echo 'CONFIG_NTSYNC=y' >> arch/arm64/configs/vendor/flourite_GKI.config
-
-      - name: Build Flourite configuration
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -euxo pipefail
-
-          # Start from the kernel's own generic ARM64 defconfig, then merge
-          # Xiaomi's Flourite-specific config fragment.
-          make O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
-          "$KERNEL_DIR/scripts/kconfig/merge_config.sh" \
-            -m -O "$OUT_DIR" \
-            "$OUT_DIR/.config" \
-            "$KERNEL_DIR/arch/arm64/configs/vendor/flourite_GKI.config"
-
-          # KSU/SUSFS are enabled in the generated output config, never by
-          # editing the source .config (there is no source-tree .config).
-          scripts/config --file "$OUT_DIR/.config" --enable CONFIG_KSU
-
-          if [ "${{ inputs.enable_susfs }}" = "true" ]; then
-            scripts/config --file "$OUT_DIR/.config" \
-              --enable CONFIG_KSU_SUSFS \
-              --enable CONFIG_KSU_SUSFS_SUS_PATH \
-              --enable CONFIG_KSU_SUSFS_SUS_MOUNT \
-              --enable CONFIG_KSU_SUSFS_SUS_KSTAT \
-              --enable CONFIG_KSU_SUSFS_SPOOF_UNAME \
-              --enable CONFIG_KSU_SUSFS_ENABLE_LOG \
-              --enable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-              --enable CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-              --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-              --enable CONFIG_KSU_SUSFS_SUS_MAP \
-              --disable CONFIG_KSU_SUSFS_SUS_SU
-          fi
-
-          make O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-          cp "$OUT_DIR/.config" "$GITHUB_WORKSPACE/kernel.config"
-
-          grep -E '^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_MI_|CONFIG_QCOM_)' \
-            "$OUT_DIR/.config" | head -n 120 || true
-
-      - name: Build kernel
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -euxo pipefail
-
-          if [ "${{ inputs.build_time }}" = "N" ] || [ -z "${{ inputs.build_time }}" ]; then
-            export KBUILD_BUILD_TIMESTAMP="$(date -u '+%a %b %d %T UTC %Y')"
-          else
-            export KBUILD_BUILD_TIMESTAMP="${{ inputs.build_time }}"
-          fi
-          export KBUILD_BUILD_USER=GitHub
-          export KBUILD_BUILD_HOST=Actions
-
-          make -j"$(nproc)" \
-            O="$OUT_DIR" \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CC="clang" \
-            LD="ld.lld" \
-            Image modules dtbs
-
-          test -s "$OUT_DIR/arch/arm64/boot/Image"
-          strings "$OUT_DIR/arch/arm64/boot/Image" | grep -m1 'Linux version' || true
-
-      - name: Build Bypass kernel
-        if: inputs.build_bypass
-        working-directory: ${{ env.KERNEL_DIR }}
-        run: |
-          set -euxo pipefail
-          cp "$OUT_DIR/.config" /tmp/flourite-normal.config
-          target="kernel/module/internal.c"
-          if [ ! -f "$target" ]; then
-            target="kernel/module.c"
-          fi
-          if grep -q 'bad_version:' "$target"; then
-            sed -i '/bad_version:/{:a;n;/return 0;/{s/return 0;/return 1;/;b};ba}' "$target"
-          else
-            echo "::error::Could not locate bad_version module check"
-            exit 1
-          fi
-          rm -rf "$OUT_DIR-bypass"
-          make O="$OUT_DIR-bypass" ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-          make -j"$(nproc)" O="$OUT_DIR-bypass" ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-            CC=clang LD=ld.lld Image modules dtbs
-          cp "$OUT_DIR-bypass/arch/arm64/boot/Image" "$GITHUB_WORKSPACE/Bypass-Image"
-
-      - name: Prepare AnyKernel3
-        run: |
-          set -euxo pipefail
-          rm -rf "$GITHUB_WORKSPACE/AnyKernel3"
-          git clone --depth=1 https://github.com/ReSukiSU-GKI/AnyKernel3.git \
-            "$GITHUB_WORKSPACE/AnyKernel3"
-          rm -rf "$GITHUB_WORKSPACE/AnyKernel3/.git"
-          cp "$OUT_DIR/arch/arm64/boot/Image" "$GITHUB_WORKSPACE/AnyKernel3/Image"
-          cp "$GITHUB_WORKSPACE/kernel.config" "$GITHUB_WORKSPACE/AnyKernel3/kernel.config"
-
-          if [ -f "$GITHUB_WORKSPACE/Bypass-Image" ]; then
-            cp "$GITHUB_WORKSPACE/Bypass-Image" "$GITHUB_WORKSPACE/AnyKernel3/Bypass-Image"
-          fi
-
-      - name: Package artifacts
-        run: |
-          set -euxo pipefail
-          cd "$GITHUB_WORKSPACE/AnyKernel3"
-          zip -r -9 "$GITHUB_WORKSPACE/Flourite-ReSukiSU-AnyKernel3.zip" . \
-            -x '*.git*'
-
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp "$OUT_DIR/arch/arm64/boot/Image" "$GITHUB_WORKSPACE/dist/Image"
-          cp "$GITHUB_WORKSPACE/kernel.config" "$GITHUB_WORKSPACE/dist/kernel.config"
-          cp "$OUT_DIR/System.map" "$GITHUB_WORKSPACE/dist/System.map"
-          cp "$OUT_DIR/.config" "$GITHUB_WORKSPACE/dist/.config"
-
-          tar -C "$OUT_DIR" -czf "$GITHUB_WORKSPACE/dist/modules.tar.gz" \
-            lib/modules 2>/dev/null || true
-
-          cat > "$GITHUB_WORKSPACE/dist/build-info.txt" <<EOF
-          Kernel source: $KERNEL_REPO
-          Kernel branch: $KERNEL_BRANCH
-          Kernel commit: $KERNEL_COMMIT
-          Kernel version: $KERNEL_VERSION
-          ReSukiSU repository: $RESUKISU_REPO
-          ReSukiSU ref: ${{ inputs.resukisu_ref }}
-          ReSukiSU commit: ${RESUKISU_COMMIT:-unknown}
-          ReSukiSU tag: ${RESUKISU_TAG:-unknown}
-          SUSFS enabled: ${{ inputs.enable_susfs }}
-          SUSFS branch: $SUSFS_BRANCH
-          LLVM: $(clang --version | head -n1)
+          cat > drivers/rekernel/Makefile <<'EOF'
+          obj-$(CONFIG_REKERNEL) += rekernel.o
+          ccflags-$(CONFIG_REKERNEL_NETWORK) += -DNETWORK_FILTER
           EOF
 
-      - name: Upload kernel artifacts
-        uses: actions/upload-artifact@v4
+          grep -qF 'source "drivers/rekernel/Kconfig"' drivers/Kconfig || \
+            sed -i '/^endmenu$/i source "drivers/rekernel/Kconfig"' drivers/Kconfig
+          grep -qF 'obj-$(CONFIG_REKERNEL) += rekernel/' drivers/Makefile || \
+            echo 'obj-$(CONFIG_REKERNEL) += rekernel/' >> drivers/Makefile
+
+          sed -i 's|#include <../android/binder_internal.h>|#include "../../drivers/android/binder_internal.h"|g' \
+            drivers/rekernel/rekernel.c || true
+          grep -qF '#include <linux/seq_file.h>' drivers/rekernel/rekernel.c || \
+            sed -i '/#include <trace\/hooks\/signal.h>/a #include <linux/seq_file.h>' drivers/rekernel/rekernel.c || true
+
+      - name: Apply Droidspaces SYSVIPC patch
+        if: inputs.clean_build != true && inputs.droidspaces != 'off'
+        working-directory: ${{ env.KERNEL_ROOT }}
+        env:
+          SLOT: ${{ inputs.droidspaces }}
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 https://github.com/ravindu644/Droidspaces-OSS.git /tmp/Droidspaces-OSS
+          PATCH_ROOT="/tmp/Droidspaces-OSS/Documentation/resources/kernel-patches/GKI"
+          SLOT_NAME="$(echo "$SLOT" | sed 's/\(.\)/\1_/g; s/_$//')"
+          PATCH="$PATCH_ROOT/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_${SLOT_NAME}.patch"
+
+          test -f "$PATCH"
+          patch -p1 --forward < "$PATCH"
+
+          for cfg in CONFIG_SYSVIPC CONFIG_POSIX_MQUEUE CONFIG_IPC_NS CONFIG_PID_NS CONFIG_DEVTMPFS; do
+            if grep -q "^${cfg}=y$" arch/arm64/configs/gki_defconfig; then
+              :
+            elif grep -q "^# ${cfg} is not set$" arch/arm64/configs/gki_defconfig; then
+              sed -i "s/^# ${cfg} is not set$/${cfg}=y/" arch/arm64/configs/gki_defconfig
+            else
+              echo "${cfg}=y" >> arch/arm64/configs/gki_defconfig
+            fi
+          done
+
+      - name: Apply Droidspaces NTSync
+        if: inputs.clean_build != true && inputs.droidspaces != 'off' && inputs.droidspaces_ntsync
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -euxo pipefail
+          wget -q https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync/ntsync_base.patch
+          wget -q https://raw.githubusercontent.com/Goldzxcbug/Droidspaces_Kernel_patch/refs/heads/main/NTsync/ntsync_compat_android14-6.1.patch
+          patch -p1 < ntsync_base.patch
+          patch -p1 < ntsync_compat_android14-6.1.patch
+          echo 'CONFIG_NTSYNC=y' >> arch/arm64/configs/gki_defconfig
+
+      - name: Prepare kernel configuration
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -euxo pipefail
+
+          rm -rf out
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
+
+          # Xiaomi's Flourite device configuration is a source-tree fragment,
+          # not an ACK manifest/matrix entry.
+          cat arch/arm64/configs/vendor/flourite_GKI.config >> out/.config
+
+          if [ -f arch/arm64/configs/vendor/flourite_consolidate.config ]; then
+            cat arch/arm64/configs/vendor/flourite_consolidate.config >> out/.config
+          fi
+
+          # Feature configuration
+          if [ "${{ inputs.clean_build }}" != "true" ]; then
+            cat >> out/.config <<'EOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_MANUAL_HOOK=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          EOF
+
+            if [ "${{ inputs.enable_susfs }}" = "true" ]; then
+              cat >> out/.config <<'EOF'
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          EOF
+            fi
+
+            if [ "${{ inputs.use_zram }}" = "true" ]; then
+              cat >> out/.config <<'EOF'
+          CONFIG_ZSMALLOC=y
+          CONFIG_ZRAM=y
+          EOF
+              cat "$GITHUB_WORKSPACE/config/zram.config" >> out/.config
+            fi
+
+            if [ "${{ inputs.use_rekernel }}" = "true" ]; then
+              cat >> out/.config <<'EOF'
+          CONFIG_REKERNEL=y
+          CONFIG_REKERNEL_NETWORK=y
+          EOF
+            fi
+          fi
+
+          # Normalize and validate the merged configuration.
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+
+          grep -q '^CONFIG_ARM64=y$' out/.config
+          grep -q '^CONFIG_KSU=y$' out/.config && true || \
+            [ "${{ inputs.clean_build }}" = "true" ]
+          grep -q '^CONFIG_MI_HARDWARE_ID=' out/.config || true
+
+          echo "## Final config" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^(CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_BBG|CONFIG_REKERNEL|CONFIG_ZRAM|CONFIG_ZSMALLOC|CONFIG_NTSYNC)=' out/.config || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set kernel version suffix
+        if: inputs.version != ''
+        working-directory: ${{ env.KERNEL_ROOT }}
+        env:
+          VERSION_SUFFIX: ${{ inputs.version }}
+        run: |
+          set -euxo pipefail
+          if [ -f arch/arm64/configs/gki_defconfig ]; then
+            sed -i '/^CONFIG_LOCALVERSION=/d' arch/arm64/configs/gki_defconfig
+            echo "CONFIG_LOCALVERSION=\"-$VERSION_SUFFIX\"" >> arch/arm64/configs/gki_defconfig
+            make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+          fi
+
+      - name: Set build timestamp
+        working-directory: ${{ env.KERNEL_ROOT }}
+        env:
+          BUILD_TIME_INPUT: ${{ inputs.build_time }}
+        run: |
+          set -euxo pipefail
+          if [ -z "$BUILD_TIME_INPUT" ] || [ "$BUILD_TIME_INPUT" = "N" ] || [ "$BUILD_TIME_INPUT" = "n" ]; then
+            BUILD_TIME="$(TZ=UTC date '+%a %b %d %T %Z %Y')"
+          else
+            BUILD_TIME="$BUILD_TIME_INPUT"
+          fi
+          echo "KBUILD_BUILD_TIMESTAMP=$BUILD_TIME" >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_VERSION=1" >> "$GITHUB_ENV"
+
+      - name: Build Flourite kernel
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -euxo pipefail
+          export ARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC="ccache clang"
+          export HOSTCC=clang
+          export HOSTCXX=clang++
+
+          make O=out -j"$(nproc)" Image Image.gz Image.lz4 dtbs modules
+
+          test -f out/arch/arm64/boot/Image
+          strings out/arch/arm64/boot/Image | grep -m1 'Linux version' || true
+
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            INSTALL_MOD_PATH="$PWD/out/modules" modules_install || true
+
+      - name: Build Bypass Image
+        if: inputs.build_bypass
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -euxo pipefail
+          TARGET=""
+          if [ -f kernel/module/version.c ]; then
+            TARGET=kernel/module/version.c
+          elif [ -f kernel/module.c ]; then
+            TARGET=kernel/module.c
+          fi
+
+          test -n "$TARGET"
+          grep -q 'bad_version:' "$TARGET"
+
+          sed -i '/bad_version:/{:a;n;/return 0;/{s/return 0;/return 1;/;b};ba}' "$TARGET"
+
+          rm -rf out-bypass
+          cp -a out/. out-bypass/
+          make O=out-bypass ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- -j"$(nproc)" Image
+
+          cp out-bypass/arch/arm64/boot/Image "$GITHUB_WORKSPACE/Bypass-Image"
+
+      - name: Collect kernel outputs
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/kernel-output"
+
+          cp out/arch/arm64/boot/Image "$GITHUB_WORKSPACE/kernel-output/Image"
+          [ ! -f out/arch/arm64/boot/Image.gz ] || cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/kernel-output/Image.gz"
+          [ ! -f out/arch/arm64/boot/Image.lz4 ] || cp out/arch/arm64/boot/Image.lz4 "$GITHUB_WORKSPACE/kernel-output/Image.lz4"
+
+          find out/arch/arm64/boot/dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) \
+            -exec cp --parents {} "$GITHUB_WORKSPACE/kernel-output/" \; 2>/dev/null || true
+
+          cp out/.config "$GITHUB_WORKSPACE/kernel-output/kernel.config"
+          [ ! -f System.map ] || cp System.map "$GITHUB_WORKSPACE/kernel-output/System.map"
+          printf '%s\n' \
+            "Repo: $SOURCE_REPO" \
+            "Branch: $SOURCE_BRANCH" \
+            "Commit: $SOURCE_COMMIT" \
+            "Kernel: $SOURCE_VERSION" \
+            "KSU branch: ${KSU_BRANCH:-disabled}" \
+            "KSU commit: ${KSU_COMMIT:-disabled}" \
+            "SUSFS commit: ${SUSFS_LATEST_COMMIT_DATE:-disabled}" \
+            > "$GITHUB_WORKSPACE/kernel-output/BUILD_INFO.txt"
+
+      - name: Package AnyKernel3
+        if: inputs.clean_build != true
+        run: |
+          set -euxo pipefail
+          cp "$GITHUB_WORKSPACE/kernel-output/Image" "$ANYKERNEL3/Image"
+
+          if [ "${{ inputs.build_bypass }}" = "true" ]; then
+            cp "$GITHUB_WORKSPACE/Bypass-Image" "$ANYKERNEL3/Bypass-Image"
+            patch -p1 --forward < "$GITHUB_WORKSPACE/.github/patches/bypass.patch"
+          fi
+
+          cd "$ANYKERNEL3"
+          rm -rf .git
+          ZIP_NAME="Flourite-${SOURCE_VERSION}-${{ inputs.clean_build && 'Clean' || 'ReSukiSU' }}-AnyKernel3.zip"
+          zip -r -q "$GITHUB_WORKSPACE/$ZIP_NAME" ./*
+
+      - name: Upload kernel output
+        uses: actions/upload-artifact@v6
         with:
-          name: Flourite-ReSukiSU-${{ env.KERNEL_VERSION }}
-          path: |
-            Flourite-ReSukiSU-AnyKernel3.zip
-            dist/
+          name: Flourite-${{ env.SOURCE_VERSION }}-kernel
+          path: kernel-output/
           compression-level: 0
+
+      - name: Upload AnyKernel3
+        if: inputs.clean_build != true
+        uses: actions/upload-artifact@v6
+        with:
+          name: Flourite-${{ env.SOURCE_VERSION }}-AnyKernel3
+          path: "*AnyKernel3.zip"
+          compression-level: 0
+
+      - name: Collect patch rejects
+        if: always()
+        run: |
+          set +e
+          mkdir -p patch-rejects
+          find "$RUNNER_TEMP/flourite" -type f \( -name '*.rej' -o -name '*.orig' \) \
+            -exec cp --parents {} patch-rejects/ \;
+          if [ -z "$(find patch-rejects -type f -print -quit)" ]; then
+            rm -rf patch-rejects
+          fi
+
+      - name: Upload patch rejects
+        if: always() && hashFiles('patch-rejects/**') != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: Flourite-patch-rejects
+          path: patch-rejects/
+          if-no-files-found: ignore
