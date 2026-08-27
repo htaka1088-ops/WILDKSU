@@ -31,11 +31,11 @@ on:
           - PERF
           - ALL
           - NONE
-      ksu_ref:
-        description: 'KernelSU-Next ref (default: next-susfs)'
+      ksu_branch:
+        description: 'KernelSU-Next branch or commit (default: dev-susfs)'
         required: false
         type: string
-        default: 'next-susfs'
+        default: 'dev-susfs'
       susfs_ref:
         description: 'SUSFS ref (default: gki-android14-6.1)'
         required: false
@@ -61,7 +61,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       feature_set: ${{ inputs.feature_set }}
-      ksu_ref: ${{ inputs.ksu_ref }}
+      ksu_branch: ${{ inputs.ksu_branch }}
       susfs_ref: ${{ inputs.susfs_ref }}
       build_jobs: ${{ inputs.build_jobs }}
       lto: ${{ inputs.lto }}

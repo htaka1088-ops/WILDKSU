@@ -6,7 +6,7 @@ on:
       feature_set:
         required: true
         type: string
-      ksu_ref:
+      ksu_branch:
         required: true
         type: string
       susfs_ref:
@@ -80,7 +80,7 @@ jobs:
         if: ${{ contains(inputs.feature_set, 'KSUN') || inputs.feature_set == 'ALL' }}
         uses: ./.github/actions/kernelsu-next
         with:
-          ref: ${{ inputs.ksu_ref }}
+          ref: ${{ inputs.ksu_branch }}
 
       - name: SUSFS
         if: ${{ contains(inputs.feature_set, 'SUSFS') || inputs.feature_set == 'ALL' }}
