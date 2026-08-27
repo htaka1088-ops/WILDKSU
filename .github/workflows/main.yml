@@ -1,0 +1,153 @@
+# ========================================
+# Flourite Kernel build main entry
+# ========================================
+# This is the manual entry point. The only kernel source used is:
+# MiCode/Xiaomi_Kernel_OpenSource @ flourite-v-oss
+# ========================================
+
+name: Build Flourite Kernel
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  KERNEL_SOURCE_REPO: https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git
+  KERNEL_SOURCE_BRANCH: flourite-v-oss
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "Release type"
+        type: choice
+        options: [Actions, Pre-Release, Release]
+        default: Actions
+      kernelsu_branch:
+        description: "ReSukiSU branch or commit (default: main)"
+        type: string
+        default: main
+        required: false
+      susfs_branch:
+        description: "SUSFS branch (default: gki-android14-6.1)"
+        type: string
+        default: gki-android14-6.1
+        required: false
+      version:
+        description: "Custom build name (optional)"
+        type: string
+        default: ""
+        required: false
+      build_time:
+        description: "Build timestamp (optional; leave default for current UTC)"
+        type: string
+        default: ""
+        required: false
+      clean_build:
+        description: "Clean kernel: do not integrate ReSukiSU/SUSFS/optional patches"
+        type: boolean
+        default: false
+      use_zram:
+        description: "Enable local ZRAM/LZ4 patch stack when compatible"
+        type: boolean
+        default: false
+      use_bbg:
+        description: "Enable Baseband Guard when compatible"
+        type: boolean
+        default: false
+      use_rekernel:
+        description: "Enable Re-Kernel when compatible"
+        type: boolean
+        default: false
+      cve_2026_43499_patch:
+        description: "Apply CVE-2026-43499 patch chain when applicable"
+        type: boolean
+        default: true
+      droidspaces:
+        description: "Droidspaces (disabled by default for Flourite)"
+        type: choice
+        options: [off, 678, 123, 345]
+        default: off
+      droidspaces_ntsync:
+        description: "Enable NTSync with Droidspaces"
+        type: boolean
+        default: false
+      build_bypass:
+        description: "Build an additional module-version bypass Image"
+        type: boolean
+        default: false
+      commit:
+        description: "Commit/message for release notes"
+        type: string
+        default: ""
+        required: false
+      change_log:
+        description: "Change log"
+        type: string
+        default: ""
+        required: false
+
+jobs:
+  build-flourite:
+    uses: ./.github/workflows/build-flourite.yml
+    secrets: inherit
+    with:
+      kernelsu_branch: ${{ inputs.kernelsu_branch }}
+      susfs_branch: ${{ inputs.susfs_branch }}
+      version: ${{ inputs.version }}
+      build_time: ${{ inputs.build_time }}
+      clean_build: ${{ inputs.clean_build }}
+      use_zram: ${{ inputs.use_zram }}
+      use_bbg: ${{ inputs.use_bbg }}
+      use_rekernel: ${{ inputs.use_rekernel }}
+      cve_2026_43499_patch: ${{ inputs.cve_2026_43499_patch }}
+      droidspaces: ${{ inputs.droidspaces }}
+      droidspaces_ntsync: ${{ inputs.droidspaces_ntsync }}
+      build_bypass: ${{ inputs.build_bypass }}
+
+  release:
+    if: ${{ always() && !cancelled() && inputs.release_type != 'Actions' && needs.build-flourite.result == 'success' }}
+    needs: build-flourite
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ./artifacts
+          pattern: 'flourite-*'
+
+      - name: Verify artifacts
+        run: |
+          set -euo pipefail
+          find ./artifacts -type f -print
+          test -n "$(find ./artifacts -type f -name '*AnyKernel3.zip' -print -quit)"
+
+      - name: Create release
+        run: |
+          set -euo pipefail
+          TAG="flourite-$(date -u +%Y%m%d-%H%M%S)"
+          if [ -n "${{ inputs.version }}" ]; then TAG="${{ inputs.version }}-$TAG"; fi
+          NOTES=$(cat <<'EOF'
+          ## Flourite Kernel
+
+          - Source: `MiCode/Xiaomi_Kernel_OpenSource`
+          - Branch: `flourite-v-oss`
+          - ReSukiSU: `${{ inputs.clean_build && 'disabled' || inputs.kernelsu_branch }}`
+          - SUSFS: `${{ inputs.clean_build && 'disabled' || inputs.susfs_branch }}`
+          - Commit: `${{ inputs.commit }}`
+
+          ### Change log
+          ${{ inputs.change_log }}
+          EOF
+          )
+          gh release create "$TAG" ./artifacts/**/\* --title "Flourite Kernel $TAG" --notes "$NOTES" ${{ inputs.release_type == 'Pre-Release' && '--prerelease' || '' }}
