@@ -59,10 +59,20 @@ jobs:
         working-directory: kernel
         run: |
           set -euxo pipefail
-          echo "SOURCE_REPO=https://github.com/MiCode/Xiaomi_Kernel_OpenSource" >> "$GITHUB_ENV"
-          echo "SOURCE_BRANCH=flourite-v-oss" >> "$GITHUB_ENV"
-          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "KERNEL_VERSION=$(make -s kernelversion)" >> "$GITHUB_ENV"
+          SOURCE_REPO="https://github.com/MiCode/Xiaomi_Kernel_OpenSource"
+          SOURCE_BRANCH="flourite-v-oss"
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          KERNEL_VERSION="$(make -s kernelversion)"
+
+          # Export for subsequent GitHub Actions steps. Values written to
+          # GITHUB_ENV are not available as shell variables until the next step.
+          {
+            echo "SOURCE_REPO=$SOURCE_REPO"
+            echo "SOURCE_BRANCH=$SOURCE_BRANCH"
+            echo "SOURCE_COMMIT=$SOURCE_COMMIT"
+            echo "KERNEL_VERSION=$KERNEL_VERSION"
+          } >> "$GITHUB_ENV"
+
           printf '## Source\n\n- Repo: `%s`\n- Branch: `%s`\n- Commit: `%s`\n- Kernel: `%s`\n' \
             "$SOURCE_REPO" "$SOURCE_BRANCH" "$SOURCE_COMMIT" "$KERNEL_VERSION" >> "$GITHUB_STEP_SUMMARY"
 
